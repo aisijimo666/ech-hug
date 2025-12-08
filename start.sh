@@ -24,9 +24,8 @@ quicktunnel() {
 
     # 覆寫 /etc/resolv.conf，確保在執行 curl 下載前使用指定的 DNS
 
-    # echo "nameserver 1.1.1.1" > /etc/resolv.conf
-
-    # echo "nameserver 1.0.0.1" >> /etc/resolv.conf
+    echo "nameserver 1.1.1.1" > /etc/resolv.conf
+    echo "nameserver 1.0.0.1" >> /etc/resolv.conf
 
     # --- END: 插入的 DNS 設定程式碼 ---
 
@@ -158,7 +157,7 @@ quicktunnel() {
 
 
 
-    ECH_CMD="./ech-server-linux -l ws://0.0.0.0:$wsport -dns 1.1.1.1:53"
+    ECH_CMD="nohup ./ech-server-linux -l ws://0.0.0.0:$wsport > /dev/null 2>&1 &"
 
     
 

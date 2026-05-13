@@ -21,19 +21,22 @@ quicktunnel() {
     local CLOUDFLARED_URL=""
 
     case "$ARCH" in
-        x86_64 | x64 | amd64 )
-            ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-amd64"
-            OPERA_URL="https://github.com/Snawoot/opera-proxy/releases/latest/download/opera-proxy.linux-amd64"
+        x86_64|amd64)
+            #ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-amd64"
+            ECH_URL="https://github.com/aisijimo666/x-tunnel-smux/releases/download/x-tunnel20260324/x-tunnel-linux-amd64"
+            OPERA_URL="https://github.com/Alexey71/opera-proxy/releases/download/v1.16.0/opera-proxy.linux-amd64"
             CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
             ;;
-        i386 | i686 )
-            ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-386"
-            OPERA_URL="https://github.com/Snawoot/opera-proxy/releases/latest/download/opera-proxy.linux-386"
+        i386|i686)
+            #ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-386"
+            ECH_URL="https://github.com/aisijimo666/x-tunnel-smux/releases/download/x-tunnel20260324/x-tunnel-linux-386"
+            OPERA_URL="https://github.com/Alexey71/opera-proxy/releases/download/v1.16.0/opera-proxy.linux-386"
             CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-386"
             ;;
-        armv8 | arm64 | aarch64 )
-            ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-arm64"
-            OPERA_URL="https://github.com/Snawoot/opera-proxy/releases/latest/download/opera-proxy.linux-arm64"
+        arm64|aarch64)
+            #ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-arm64"
+            ECH_URL="https://github.com/aisijimo666/x-tunnel-smux/releases/download/x-tunnel20260324/x-tunnel-linux-arm64"
+            OPERA_URL="https://github.com/Alexey71/opera-proxy/releases/download/v1.16.0/opera-proxy.linux-arm64"
             CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
             ;;
         * )

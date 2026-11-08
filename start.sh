@@ -1,25 +1,28 @@
-#!/bin/bash
-set -e
+#!/bin/sh
 
-# 獲取一個隨機端口
+# ================= 配置 =================
+ARGO_DOMAIN="${ARGO_DOMAIN:-}"
+ARGO_AUTH="${ARGO_AUTH:-}"
+# ⭐ 固定隧道模式：metrics 端口必须与 ECH 端口不同
+# ECH 使用 8001（Cloudflare 控制台配置），metrics 改用 8003
+ARGO_PORT="${ARGO_PORT:-8003}"
+IPS="${IPS:-4}"
+OPERA="${OPERA:-0}"
+COUNTRY="${COUNTRY:-AM}"
+
+# ================= 工具 =================
 get_free_port() {
-    echo $(( ( RANDOM % 20000 ) + 10000 ))
+    random=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+    echo $(( ( random % 20000 ) + 10000 ))
 }
 
-quicktunnel() {
-    echo "--- 正在強制設定 DNS 為 1.1.1.1/1.0.0.1 ---"
-    echo "nameserver 1.1.1.1" > /etc/resolv.conf
-    echo "nameserver 1.0.0.1" >> /etc/resolv.conf
+# ================= 隧道设置（后台运行）=================
+setup_tunnel() {
+    echo "--- 清理旧二进制 ---"
+    rm -f ech-server-linux opera-linux cloudflared-linux
 
-    echo "--- 正在下載服務二進制文件 ---"
-
-    local ARCH
+    echo "--- 下载二进制 ---"
     ARCH=$(uname -m)
-
-    local ECH_URL=""
-    local OPERA_URL=""
-    local CLOUDFLARED_URL=""
-
     case "$ARCH" in
         x86_64|amd64)
             ECH_URL="https://github.com/webappstars/ech-hug/releases/download/3.0/ech-tunnel-linux-amd64"
@@ -40,134 +43,189 @@ quicktunnel() {
             CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
             ;;
         * )
-            echo "當前架構 $ARCH 沒有适配。退出。"
-            exit 1
+            echo "❌ 不支持的架构: $ARCH"
+            return 1
             ;;
     esac
 
-    curl -fL "$ECH_URL" -o ech-server-linux
-    curl -fL "$OPERA_URL" -o opera-linux
-    curl -fL "$CLOUDFLARED_URL" -o cloudflared-linux
+    curl -fsSL --retry 2 --connect-timeout 10 --max-time 120 "$ECH_URL" -o ech-server-linux || { echo "❌ 下载 ECH 失败"; return 1; }
+    if [ "$OPERA" = "1" ]; then
+        curl -fsSL --retry 2 --connect-timeout 10 --max-time 120 "$OPERA_URL" -o opera-linux || { echo "❌ 下载 Opera 失败"; return 1; }
+        chmod +x opera-linux
+    fi
+    curl -fsSL --retry 2 --connect-timeout 10 --max-time 120 "$CLOUDFLARED_URL" -o cloudflared-linux || { echo "❌ 下载 Cloudflared 失败"; return 1; }
+    chmod +x ech-server-linux cloudflared-linux
 
-    chmod +x cloudflared-linux ech-server-linux opera-linux
-
-    local COUNTRY_UPPER="${COUNTRY^^}"
-
-    echo "--- 啟動服務 ---"
-
-    # 端口分配：
-    # Caddy = WSPORT
-    # ECH   = WSPORT + 1
-    if [ -z "$WSPORT" ]; then
-        WSPORT=$(get_free_port)
-        echo "WSPORT 未設置，自動選取給 Caddy 的端口: $WSPORT"
+    # ================= 端口 =================
+    # ⭐ 固定隧道模式必须使用固定端口（因为 Cloudflare 控制台配置了具体端口）
+    if [ -n "$ARGO_AUTH" ]; then
+        # 固定隧道：使用固定端口 8001（与 Cloudflare 控制台配置一致）
+        WSPORT=8000
+        ECHPORT=8001
+        echo "WS: $WSPORT  ECH: $ECHPORT (固定端口模式)"
     else
-        echo "使用自定義 WSPORT 給 Caddy: $WSPORT"
+        # 快速隧道：使用随机端口
+        WSPORT=${WSPORT:-$(get_free_port)}
+        ECHPORT=$((WSPORT + 1))
+        echo "WS: $WSPORT  ECH: $ECHPORT"
     fi
 
-    ECHPORT=$((WSPORT + 1))
-    export WSPORT ECHPORT
-    echo "ECH Server 將使用端口: $ECHPORT"
-
-    # 1) Opera Proxy
+    # ================= Opera =================
     if [ "$OPERA" = "1" ]; then
+        COUNTRY=$(echo "$COUNTRY" | tr 'a-z' 'A-Z')
         operaport=$(get_free_port)
-        echo "啟動 Opera Proxy (port: $operaport, country: $COUNTRY_UPPER)..."
-        nohup ./opera-linux \
-            -country "$COUNTRY_UPPER" \
-            -socks-mode \
-            -bind-address "127.0.0.1:$operaport" \
-            > /dev/null 2>&1 &
-        OPERA_PID=$!
+        echo "启动 Opera Proxy (port:$operaport, country:$COUNTRY)"
+        nohup ./opera-linux -country "$COUNTRY" -socks-mode \
+            -bind-address "127.0.0.1:$operaport" >/dev/null 2>&1 &
     fi
 
-    # 2) ECH Server
+    # ================= ECH =================
     sleep 1
+    ECH_ARGS="./ech-server-linux -l ws://0.0.0.0:$ECHPORT"
+    [ -n "$TOKEN" ] && ECH_ARGS="$ECH_ARGS -token $TOKEN"
+    [ "$OPERA" = "1" ] && ECH_ARGS="$ECH_ARGS -f socks5://127.0.0.1:$operaport"
 
-    ECH_ARGS=(./ech-server-linux -l "ws://0.0.0.0:$ECHPORT")
+    echo "启动 ECH Server..."
+    nohup sh -c "$ECH_ARGS" >/dev/null 2>&1 &
 
-    if [ -n "$TOKEN" ]; then
-        ECH_ARGS+=(-token "$TOKEN")
-        echo "ECH Server 已設置 token（不在前台顯示）"
-    else
-        echo "ECH Server 未設置 token"
-    fi
-
-    if [ "$OPERA" = "1" ]; then
-        ECH_ARGS+=(-f "socks5://127.0.0.1:$operaport")
-    fi
-
-    echo "啟動 ECH Server (port: $ECHPORT)..."
-    nohup "${ECH_ARGS[@]}" > /dev/null 2>&1 &
-    ECH_PID=$!
-
-    # 3) Cloudflared -> ECHPORT
-    metricsport=$(get_free_port)
-    echo "啟動 Cloudflared Tunnel (metrics port: $metricsport)..."
-    ./cloudflared-linux update > /dev/null 2>&1 || true
-
-    nohup ./cloudflared-linux \
-        --edge-ip-version "$IPS" \
-        --protocol http2 \
-        tunnel --url "127.0.0.1:$ECHPORT" \
-        --metrics "0.0.0.0:$metricsport" \
-        > /dev/null 2>&1 &
-    CF_PID=$!
-
-    # 4) 获取 Argo 域名
-    while true; do
-        echo "正在嘗試獲取 Argo 域名..."
-        RESP=$(curl -s "http://127.0.0.1:$metricsport/metrics" || true)
-
-        if echo "$RESP" | grep -q 'userHostname='; then
-            echo "獲取成功，正在解析..."
-            DOMAIN=$(echo "$RESP" | grep 'userHostname="' | sed -E 's/.*userHostname="https?:\/\/([^"]+)".*/\1/')
-
-            echo "--- ECH + Cloudflared 啟動成功 ---"
-            if [ -z "$TOKEN" ]; then
-                echo "未設置 token, 連接為: $DOMAIN:443"
-            else
-                echo "已設置 token, 連接為: $DOMAIN:443 （token 不顯示）"
-            fi
-            break
-        else
-            echo "未獲取到 userHostname，5秒後重試..."
-            sleep 5
-        fi
+    i=0
+    while [ $i -lt 15 ]; do
+        (bash -c "echo >/dev/tcp/127.0.0.1/$ECHPORT" 2>/dev/null) && break
+        sleep 1
+        i=$((i+1))
     done
+
+    if [ $i -eq 15 ]; then
+        echo "❌ ECH 未监听端口 $ECHPORT"
+        return 1
+    fi
+
+    # ================= Cloudflared =================
+    echo "启动 Cloudflared..."
+    CLOUDFLARED_LOG="/tmp/cloudflared.log"
+    ARGO_ARGS="--protocol http2"
+
+    # ⭐ 关键区分：固定隧道 vs 快速隧道
+    if [ -n "$ARGO_AUTH" ]; then
+        # 【固定隧道模式】支持两种认证格式
+        # 格式1: JSON credentials file（新版本）
+        # 格式2: 单字符串 token（旧版本）
+        
+        # ⭐ 必须配置域名才能使用固定隧道
+        if [ -z "$ARGO_DOMAIN" ]; then
+            echo "❌ 固定隧道模式需要配置 ARGO_DOMAIN"
+            echo "   请在 Replit Secrets 中添加 ARGO_DOMAIN=你的域名"
+            return 1
+        fi
+        
+        # 检测 ARGO_AUTH 是否为 JSON 格式
+        if echo "$ARGO_AUTH" | grep -q '^{' 2>/dev/null; then
+            # JSON 格式：写入 credentials file
+            ARGO_AUTH_FILE="/tmp/argo_auth.json"
+            echo "$ARGO_AUTH" > "$ARGO_AUTH_FILE"
+            chmod 600 "$ARGO_AUTH_FILE"
+            ARGO_ARGS="$ARGO_ARGS --credentials-file $ARGO_AUTH_FILE"
+            echo "使用 JSON credentials 格式"
+        else
+            # Token 格式：直接使用 --token 参数
+            ARGO_ARGS="$ARGO_ARGS --token $ARGO_AUTH"
+            echo "使用 Token 格式"
+        fi
+        
+        # 固定隧道使用 tunnel run 命令
+        # ⭐ 注意：新版本 cloudflared 不再支持 --hostname 参数
+        # 域名路由在 Cloudflare Zero Trust 控制台配置，cloudflared 只负责连接隧道
+        
+        echo "启动 Cloudflared (固定隧道模式)..."
+        # ⭐ 添加调试信息
+        echo "  Token 格式: $(echo "$ARGO_AUTH" | cut -c1-30)..."
+        echo "  目标域名: $ARGO_DOMAIN"
+        echo "  ECH 端口: $ECHPORT"
+        echo "  网络测试..."
+        curl -s -o /dev/null -w "  Cloudflare API: %{http_code}\n" --connect-timeout 5 https://api.cloudflare.com 2>/dev/null || echo "  Cloudflare API: 连接失败"
+        
+        env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+            nohup ./cloudflared-linux \
+            --metrics "127.0.0.1:$ARGO_PORT" \
+            tunnel \
+            run \
+            $ARGO_ARGS \
+            --url "127.0.0.1:$ECHPORT" \
+            >"$CLOUDFLARED_LOG" 2>&1 &
+        CF_PID=$!
+        echo "  cloudflared PID: $CF_PID"
+        
+        # 等待进程启动
+        sleep 2
+        if ! kill -0 $CF_PID 2>/dev/null; then
+            echo "❌ cloudflared 进程启动失败！"
+            echo "  查看日志: cat $CLOUDFLARED_LOG"
+            return 1
+        fi
+        echo "  cloudflared 已启动，等待连接..."
+    else
+        # 【快速隧道模式】使用 tunnel --url
+        echo "启动 Cloudflared (快速隧道模式)..."
+        env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+            nohup ./cloudflared-linux \
+            --metrics "127.0.0.1:$ARGO_PORT" \
+            tunnel \
+            --url "127.0.0.1:$ECHPORT" \
+            $ARGO_ARGS \
+            >"$CLOUDFLARED_LOG" 2>&1 &
+    fi
+
+    sleep 3
+
+    # ================= 获取域名 =================
+    if [ -n "$ARGO_DOMAIN" ]; then
+        TUNNEL_DOMAIN="$ARGO_DOMAIN"
+    else
+        for i in $(seq 1 30); do
+            TUNNEL_DOMAIN=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | head -n 1)
+            [ -n "$TUNNEL_DOMAIN" ] && break
+            TUNNEL_DOMAIN=$(curl -s --connect-timeout 2 --max-time 3 \
+                "http://127.0.0.1:$ARGO_PORT/metrics" \
+                | grep 'userHostname=' \
+                | sed -E 's/.*userHostname="([^"]+)".*/\1/')
+            [ -n "$TUNNEL_DOMAIN" ] && break
+            sleep 1
+        done
+    fi
+
+    if [ -z "$TUNNEL_DOMAIN" ]; then
+        echo "⚠️  获取隧道域名失败，Node.js 服务仍在运行"
+        return 0
+    fi
+
+    echo "✓ 隧道域名: $TUNNEL_DOMAIN"
+
+    # ================= 写入页面 =================
+    cat > ./tunnel_index.html <<EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Tunnel Ready</title>
+</head>
+<body style="background:#020617;color:#e5e7eb;display:flex;align-items:center;justify-content:center;height:100vh">
+<div>
+<h1>🚀 Tunnel 已就绪</h1>
+<p>$TUNNEL_DOMAIN</p>
+</div>
+</body>
+</html>
+EOF
 }
 
-# ---------------- main ----------------
+# ================= main =================
+# 清除旧的隧道页面，避免显示过期域名
+rm -f ./tunnel_index.html
 
-MODE="${1:-1}"  # 默认模式 1
+# 后台运行隧道设置
+setup_tunnel &
 
-if [ "$MODE" = "1" ]; then
-    # Opera 参数检查
-    if [ "$OPERA" = "1" ]; then
-        echo "已啟用 Opera 前置代理。"
-        COUNTRY=${COUNTRY:-AM}
-        COUNTRY=${COUNTRY^^}
-        if [ "$COUNTRY" != "AM" ] && [ "$COUNTRY" != "AS" ] && [ "$COUNTRY" != "EU" ]; then
-            echo "錯誤：請設置正確的 OPERA_COUNTRY (AM/AS/EU)。目前值: $COUNTRY"
-            exit 1
-        fi
-    elif [ "$OPERA" != "0" ]; then
-        echo "錯誤：OPERA 變數只能是 0 或 1。目前值: $OPERA"
-        exit 1
-    fi
-
-    # IPS 参数检查
-    if [ "$IPS" != "4" ] && [ "$IPS" != "6" ]; then
-        echo "錯誤：IPS 變數只能是 4 或 6。目前值: $IPS"
-        exit 1
-    fi
-
-    quicktunnel
-else
-    echo "使用非預期模式啟動。"
-    exit 1
-fi
-
-echo "--- 啟動 Caddy 前台服務（port: $WSPORT）---"
-# 最后用 exec 让 caddy 占据 PID1，容器不会退出
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# 立即启动 Node.js（保证健康检查通过）
+echo "--- 启动 Node.js 服务器 ---"
+# 使用 pwd 获取当前工作目录（兼容 dash/sh）
+exec node "$(pwd)/server.js"

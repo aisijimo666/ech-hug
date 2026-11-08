@@ -12,8 +12,8 @@ RUN apk add --no-cache \
  && update-ca-certificates
 
 # 静态页与 Caddy 配置
-COPY index.html /srv/index.html
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY tunnel_index.html /srv/tunnel_index.html
+
 
 # 启动脚本
 COPY start.sh /app/start.sh
@@ -22,5 +22,5 @@ RUN chmod +x /app/start.sh
 # 默认环境变量（按需覆盖）
 ENV IPS=4 OPERA=0
 
-# 由 start.sh 负责启动 ech/cloudflared/opera，并 exec caddy 前台守护
+# 由 start.sh 负责启动 ech/cloudflared/opera 前台守护
 CMD ["bash", "/app/start.sh"]

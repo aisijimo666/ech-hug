@@ -228,4 +228,4 @@ setup_tunnel &
 # 立即启动 Node.js（保证健康检查通过）
 echo "--- 启动 Node.js 服务器 ---"
 # 使用 pwd 获取当前工作目录（兼容 dash/sh）
-exec node "$(pwd)/server.js"
+# exec node "$(pwd)/server.js"

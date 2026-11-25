@@ -2,8 +2,9 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 5000;
+const PORT = Number(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
+const ROOT_DIR = path.resolve(__dirname);
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -49,45 +50,53 @@ const LOADING_PAGE = `<!DOCTYPE html>
 </body>
 </html>`;
 
-const server = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+function isSafeSubPath(targetPath) {
+    const resolved = path.resolve(targetPath);
+    return resolved === ROOT_DIR || resolved.startsWith(ROOT_DIR + path.sep);
+}
 
-    let urlPath = req.url.split('?')[0];
-
-    if (urlPath === '/' || urlPath === '/index.html') {
-        const tunnelPage = path.join(__dirname, 'tunnel_index.html');
-        if (fs.existsSync(tunnelPage)) {
-            serveFile(res, tunnelPage);
-        } else {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(LOADING_PAGE);
-        }
-        return;
-    }
-
-    const filePath = path.join(__dirname, urlPath);
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        serveFile(res, filePath);
-        return;
-    }
-
-    const tunnelPage = path.join(__dirname, 'tunnel_index.html');
+function serveTunnelOrLoading(res) {
+    const tunnelPage = path.join(ROOT_DIR, 'tunnel_index.html');
     if (fs.existsSync(tunnelPage)) {
         serveFile(res, tunnelPage);
     } else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(LOADING_PAGE);
     }
+}
+
+const server = http.createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    let urlPath;
+    try {
+        urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+    } catch (_) {
+        urlPath = '/';
+    }
+
+    if (urlPath === '/' || urlPath === '/index.html') {
+        serveTunnelOrLoading(res);
+        return;
+    }
+
+    const filePath = path.join(ROOT_DIR, urlPath);
+    if (isSafeSubPath(filePath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        serveFile(res, filePath);
+        return;
+    }
+
+    serveTunnelOrLoading(res);
 });
 
 function serveFile(res, filePath) {
     fs.readFile(filePath, (err, data) => {
         if (err) {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
             res.end('Not Found');
             return;
         }
-        const ext = path.extname(filePath);
+        const ext = path.extname(filePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(data);
@@ -96,4 +105,8 @@ function serveFile(res, filePath) {
 
 server.listen(PORT, HOST, () => {
     console.log(`Server running at http://${HOST}:${PORT}/`);
+});
+
+process.on('SIGTERM', () => {
+    server.close(() => process.exit(0));
 });
